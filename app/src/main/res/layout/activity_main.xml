@@ -10,7 +10,7 @@ android:layout_height="match_parent" >
     </pie.map.MapViews>
 
     <Button
-        android:id="@+id/button"
+        android:id="@+id/bt_switchMap"
         android:layout_width="100dp"
         android:layout_height="40dp"
         android:layout_gravity="right|bottom"
@@ -23,13 +23,13 @@ android:layout_height="match_parent" >
         android:layout_gravity="center|bottom"
         >
         <Button
-            android:id="@+id/button3"
+            android:id="@+id/bt_mapZoomIn"
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:layout_gravity="right|bottom"
             android:text="+" />
         <Button
-            android:id="@+id/button4"
+            android:id="@+id/bt_mapZoomOut"
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:layout_gravity="right|bottom"
@@ -37,10 +37,21 @@ android:layout_height="match_parent" >
     </LinearLayout>
 
     <Button
-        android:id="@+id/button2"
+        android:id="@+id/bt_Location"
         android:layout_width="100dp"
         android:layout_height="40dp"
         android:layout_gravity="left|bottom"
         android:text="当前位置" />
+
+    <com.ht.piedemo.view.RotateImageView
+        xmlns:rimage="http://schemas.android.com/apk/res-auto"
+        android:id="@+id/riv_pie_fix_compass"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:layout_gravity="left|top"
+        android:layout_marginLeft="10dp"
+        android:layout_marginTop="10dp"
+        android:src="@drawable/pie_sdk_fix_compass"
+        rimage:angle="0" />
 
 </FrameLayout>

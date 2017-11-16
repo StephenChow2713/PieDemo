@@ -1,10 +1,13 @@
 package com.ht.piedemo;
 
-
+import android.Manifest;
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.support.v7.app.AppCompatActivity;
@@ -13,7 +16,15 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
 
+import com.baidu.location.BDLocation;
+import com.baidu.location.BDLocationListener;
+import com.baidu.location.LocationClient;
+
+import com.baidu.location.LocationClientOption;
 import com.ht.piedemo.constants.PathConstant;
+import com.ht.piedemo.service.LocationService;
+import com.ht.piedemo.utils.GCJ02_BD09;
+import com.ht.piedemo.view.RotateImageView;
 
 import org.apache.tools.zip.ZipEntry;
 import org.apache.tools.zip.ZipFile;
@@ -23,13 +34,18 @@ import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.Enumeration;
 
 import pie.core.DimensionMode;
+import pie.core.GeoPoint;
 import pie.core.GisNative;
+import pie.core.MapRotateChangedListener;
 import pie.core.MapView;
 import pie.core.Point2D;
 import pie.core.SceneMode;
+import pie.core.Style;
+import pie.core.TrackingLayer;
 import pie.core.Workspace;
 import pie.map.MapViews;
 import pie.map.gesture.MapGestureController;
@@ -44,11 +60,21 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private String mapPath;
     private MapViews mMapViews; // 地图容器类，包含地图，建议使用
     private MapView mBasicMapView;// 地图View，可以从MapViews中获取
-    private Button button, button2, button3, button4;
+    private Button bt_switchMap, bt_Location, bt_mapZoomOut, bt_mapZoomIn;
     private boolean isSwitch = true;
 
     private OverlayManager overlayManager;
     private OverlayCircleOptions overlayCircleOptions;
+    private RotateImageView compassButton;
+
+    public LocationClient mLocationClient = null;
+    private final int SDK_PERMISSION_REQUEST = 127;
+    private String permissionInfo;
+    private LocationService locationService;
+    private MyLocationListener myListener = new MyLocationListener();
+    public BDLocation mylocation;
+
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,6 +85,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             new MapResourceAsyncTask().execute();
         }
         initGisNative();
+
         setContentView(R.layout.activity_main);
         initView();
         setMapView();
@@ -67,6 +94,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
         overlayManager = new OverlayManager(mBasicMapView);
         overlayCircleOptions = new OverlayCircleOptions();
+
+        getPersimmions();
+        mLocationClient = new LocationClient(getApplicationContext());
+        mLocationClient.registerLocationListener( myListener);
+        initBDMap();
+        locationService.start();
+
+
     }
 
     private void initData() {
@@ -96,14 +131,18 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         mMapViews = (MapViews) findViewById(R.id.mvs_pie_basic_map);
         // 从地图容器中获取MapView
         mBasicMapView = mMapViews.getMapView();
-        button = (Button) findViewById(R.id.button);
-        button.setOnClickListener(this);
-        button2 = (Button) findViewById(R.id.button2);
-        button2.setOnClickListener(this);
-        button3 = (Button) findViewById(R.id.button3);
-        button3.setOnClickListener(this);
-        button4 = (Button) findViewById(R.id.button4);
-        button4.setOnClickListener(this);
+        mGeometryTrackingLayer = mBasicMapView.getTrackingLayer();
+        bt_switchMap = (Button) findViewById(R.id.bt_switchMap);
+        bt_switchMap.setOnClickListener(this);
+        bt_Location = (Button) findViewById(R.id.bt_Location);
+        bt_Location.setOnClickListener(this);
+        bt_mapZoomOut = (Button) findViewById(R.id.bt_mapZoomOut);
+        bt_mapZoomOut.setOnClickListener(this);
+        bt_mapZoomIn = (Button) findViewById(R.id.bt_mapZoomIn);
+        bt_mapZoomIn.setOnClickListener(this);
+
+        compassButton = (RotateImageView) findViewById(R.id.riv_pie_fix_compass);
+        compassButton.setOnClickListener(this);
     }
 
     private void setMapView() {
@@ -115,6 +154,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         // 设置地图的显示维度(二维或者三维模式,在打开地图之前设置)。
 		mBasicMapView.setDimensionMode(DimensionMode.D3DMode);
 //        mBasicMapView.setDimensionMode(DimensionMode.D2DMode);
+        mBasicMapView
+                .setMapRotateChangedListener(new AngleRotateChangedListener());
     }
 
     /**
@@ -169,24 +210,54 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     }
 
+    protected void initBDMap() {
+        // -----------location config ------------
+        //获取locationservice实例，建议应用中只初始化1个location实例，然后使用，可以参考其他示例的activity，都是通过此种方式获取locationservice实例的
+        locationService = ((PieMapApiApplication) getApplication()).locationService;
+        //注册监听
+        locationService.registerListener( myListener);
+        //默认的定位设置
+//        locationService.setLocationOption(locationService.getDefaultLocationClientOption());
 
+        LocationClientOption mOption = new LocationClientOption();
+        mOption.setLocationMode(LocationClientOption.LocationMode.Hight_Accuracy);//可选，默认高精度，设置定位模式，高精度，低功耗，仅设备
+//        mOption.setCoorType("bd09ll");//可选，默认gcj02，设置返回的定位结果坐标系，如果配合百度地图使用，建议设置为bd09ll;
+        mOption.setScanSpan(3000);//可选，默认0，即仅定位一次，设置发起定位请求的间隔需要大于等于1000ms才是有效的
+        mOption.setIsNeedAddress(true);//可选，设置是否需要地址信息，默认不需要
+        mOption.setIsNeedLocationDescribe(true);//可选，设置是否需要地址描述
+        mOption.setNeedDeviceDirect(false);//可选，设置是否需要设备方向结果
+        mOption.setLocationNotify(false);//可选，默认false，设置是否当gps有效时按照1S1次频率输出GPS结果
+        mOption.setIgnoreKillProcess(true);//可选，默认true，定位SDK内部是一个SERVICE，并放到了独立进程，设置是否在stop的时候杀死这个进程，默认不杀死
+        mOption.setIsNeedLocationDescribe(true);//可选，默认false，设置是否需要位置语义化结果，可以在BDLocation.getLocationDescribe里得到，结果类似于“在北京天安门附近”
+        mOption.setIsNeedLocationPoiList(true);//可选，默认false，设置是否需要POI结果，可以在BDLocation.getPoiList里得到
+        mOption.SetIgnoreCacheException(false);//可选，默认false，设置是否收集CRASH信息，默认收集
+        mOption.setIsNeedAltitude(false);//可选，默认false，设置定位时是否需要海拔信息，默认不需要，除基础定位版本都可用
+
+        locationService.setLocationOption(mOption);
+
+
+    }
 
     @Override
     public void onClick(View view) {
         int id = view.getId();
 
         switch (id) {
-            case R.id.button:
+            case R.id.bt_switchMap:
                 switchMap();
                 break;
-            case R.id.button2:
-                location();
+            case R.id.bt_Location:
+                location(mylocation);
+//                locationService.start();
                 break;
-            case R.id.button3:
+            case R.id.bt_mapZoomOut:
+                mapZoomOut();
+                break;
+            case R.id.bt_mapZoomIn:
                 mapZoomIn();
                 break;
-            case R.id.button4:
-                mapZoomOut();
+            case R.id.riv_pie_fix_compass:
+                resetMapAngle();
                 break;
             default:
                 break;
@@ -215,37 +286,12 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     /**
-     * 定位到当前位置
-     */
-    private void location() {
-
-        //39.8712766624,116.3558578491
-        Point2D centerPoint2d = new Point2D(116.3558578491,39.8712766642);
-        centerPoint2d = mBasicMapView.getPrjCoordSys().latLngToProjection(centerPoint2d);
-
-//        Point2D point2D = mBasicMapView.getPrjCoordSys().projectionTolatLng(centerPoint2d);
-        setOverly();
-
-        mBasicMapView.setMapCenter(centerPoint2d);
-        resetMapAngle();
-
-    }
-
-    private void setOverly(){
-        Point2D centerPoint2d = new Point2D(116.3558578491,39.8712766642);
-        centerPoint2d = mBasicMapView.getPrjCoordSys().latLngToProjection(centerPoint2d);
-        Point2D point2D = mBasicMapView.getPrjCoordSys().projectionTolatLng(centerPoint2d);
-        overlayManager.deleteAllOverlay();
-        overlayManager.addOverlayCircle(overlayCircleOptions.circleColor(Color.RED).point(point2D).radius(2));
-    }
-
-    /**
      * 地图缩小
      */
     private void mapZoomOut() {
 
         mBasicMapView.zoomOut();
-        setOverly();
+//        setOverly(mylocation);
     }
 
     /**
@@ -253,7 +299,51 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
      */
     private void mapZoomIn() {
         mBasicMapView.zoomIn();
-        setOverly();
+//        setOverly(mylocation);
+    }
+
+    private void setOverly(BDLocation location){
+        //经度
+        double longitude = location.getLongitude();
+        //纬度
+        double latitude = location.getLatitude();
+        Point2D centerPoint2d = new Point2D(longitude,latitude);
+        centerPoint2d = mBasicMapView.getPrjCoordSys().latLngToProjection(centerPoint2d);
+        Point2D point2D = mBasicMapView.getPrjCoordSys().projectionTolatLng(centerPoint2d);
+        overlayManager.deleteAllOverlay();
+        overlayManager.addOverlayCircle(overlayCircleOptions.circleColor(Color.RED).point(point2D).radius(2));
+    }
+
+    /**
+     * 恢复地图指北
+     */
+    private void resetMapAngle() {
+
+        int currAngle = (int) mBasicMapView.getRollAngle();
+        if (currAngle == 0 || currAngle == 360) {
+            return;
+        }
+        if (currAngle > 180) {
+            mBasicMapView.startRotateAnimation(currAngle, 360);
+        } else {
+            mBasicMapView.startRotateAnimation(currAngle, 0);
+        }
+        mBasicMapView.setPitchAngle(0);
+
+    }
+    /**
+     * 地图旋转角度改变监听
+     *
+     * @author pie
+     */
+    private class AngleRotateChangedListener implements
+            MapRotateChangedListener {
+
+        @Override
+        public void onRotateChanged(double angle) {
+            compassButton.setAngle(angle);
+        }
+
     }
 
     private class MapResourceAsyncTask extends AsyncTask<Void, Void, Integer> {
@@ -388,6 +478,103 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         return true;
     }
 
+    @TargetApi(23)
+    private void getPersimmions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            ArrayList<String> permissions = new ArrayList<String>();
+            /***
+             * 定位权限为必须权限，用户如果禁止，则每次进入都会申请
+             */
+            // 定位精确位置
+            if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED){
+                permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            }
+            if(checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED){
+                permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+            }
+			/*
+			 * 读写权限和电话状态权限非必要权限(建议授予)只会申请一次，用户同意或者禁止，只会弹一次
+			 */
+            // 读写权限
+            if (addPermission(permissions, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                permissionInfo += "Manifest.permission.WRITE_EXTERNAL_STORAGE Deny \n";
+            }
+            // 读取电话状态权限
+            if (addPermission(permissions, Manifest.permission.READ_PHONE_STATE)) {
+                permissionInfo += "Manifest.permission.READ_PHONE_STATE Deny \n";
+            }
+
+            if (permissions.size() > 0) {
+                requestPermissions(permissions.toArray(new String[permissions.size()]), SDK_PERMISSION_REQUEST);
+            }
+        }
+    }
+
+    @TargetApi(23)
+    private boolean addPermission(ArrayList<String> permissionsList, String permission) {
+        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) { // 如果应用没有获得对应权限,则添加到列表中,准备批量申请
+            if (shouldShowRequestPermissionRationale(permission)){
+                return true;
+            }else{
+                permissionsList.add(permission);
+                return false;
+            }
+
+        }else{
+            return true;
+        }
+    }
+
+    @TargetApi(23)
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        // TODO Auto-generated method stub
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+    }
+
+
+    private void sendMsg(final BDLocation location) {
+        try {
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    location(location);
+                }
+            }).start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * 定位到当前位置
+     */
+    private void location(BDLocation location) {
+
+        if (location != null){
+
+//            GCJ02_BD09.Gps gps = GCJ02_BD09.bd09_To_Gcj02(location.getLongitude(), location.getLatitude());
+            //经度
+            double longitude = location.getLongitude();
+            //纬度
+            double latitude = location.getLatitude();
+
+            //392D centerPoint2d = new Point2D(116.3558578491,39.8712766642);
+            Point2D centerPoint2d = new Point2D(longitude,latitude);
+//            Point2D centerPoint2d = new Point2D(gps.lon,gps.lat);
+            centerPoint2d = mBasicMapView.getPrjCoordSys().latLngToProjection(centerPoint2d);
+
+//          setOverly(location);
+            Point2D startPnt = mBasicMapView.getMapCenter();
+            mBasicMapView.startPanAnimation(startPnt, centerPoint2d);
+            addPointAtTrackLayer(centerPoint2d);
+            mBasicMapView.setScale(2.105484291333595E-5);
+//          mBasicMapView.setMapCenter(centerPoint2d);
+        }
+
+    }
+
     @Override
     protected void onDestroy() {
         // TODO Auto-generated method stub
@@ -401,32 +588,37 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         super.onDestroy();
     }
 
-
+    private TrackingLayer mGeometryTrackingLayer;
     /**
-     * 恢复地图指北
+     * 向跟踪层添加点 需要重新创建点对象、Style对象和Geometry对象
      */
-    private void resetMapAngle() {
+    private void addPointAtTrackLayer(Point2D point) {
 
-        int currAngle = (int) mBasicMapView.getRollAngle();
-        if (currAngle == 0 || currAngle == 360) {
-            return;
-        }
-        if (currAngle > 180) {
-            mBasicMapView.startRotateAnimation(currAngle, 360);
-        } else {
-            mBasicMapView.startRotateAnimation(currAngle, 0);
-        }
-        mBasicMapView.setPitchAngle(0);
+        mGeometryTrackingLayer.removeAllGeometry();
+        GeoPoint geopt = new GeoPoint(point.x, point.y);
+        Style pointStyle = new Style();
+        pointStyle.markerStyle = 2;
+        pointStyle.markerSize = 10;
+        pointStyle.markerType = 1;
+        geopt.setStyle(pointStyle);
+        mGeometryTrackingLayer.addGeometry("p" + System.currentTimeMillis(), geopt);
 
     }
-
-
-    public void end(){
-
-        //this is a thridcommit
+    /*****
+     *
+     * 定位结果回调，重写onReceiveLocation方法，可以直接拷贝如下代码到自己工程中修改
+     *
+     */
+    public class  MyLocationListener implements BDLocationListener {
+        @Override
+        public void onReceiveLocation(BDLocation location) {
+            // TODO Auto-generated method stub
+            if (null != location && location.getLocType() != BDLocation.TypeServerError) {
+                mylocation = location;
+//                Toast.makeText(MainActivity.this,"定位回调"+location.getLatitude(),Toast.LENGTH_SHORT).show();
+//                sendMsg(location);
+            }
+        }
     }
 
 }
-
-
-
